@@ -1,0 +1,190 @@
+#!/usr/bin/env python
+
+import argparse
+import json
+import logging
+import requests
+import sys
+
+import matplotlib.pyplot as plt
+
+from datetime import datetime
+from pprint import pprint
+
+SERIESLY_URL = "http://ci.sc.couchbase.com:3133/"
+
+FORMAT = "%(asctime)s plotter %(levelname)-8s: %(message)s"
+logging.basicConfig(format=FORMAT)
+logger = logging.getLogger('plotter')
+
+def convert_stats():
+    pass
+
+def unix_time(time_str):
+    dt = datetime.strptime(time_str.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+    epoch = datetime.utcfromtimestamp(0)
+    delta = dt - epoch
+    return int(delta.total_seconds())
+
+def get_stats(url):
+    r = requests.get(url)
+    data = json.loads(r.content)
+
+    min_time = sys.maxint
+    for stats in data:
+        key_time = unix_time(stats)
+        if key_time < min_time:
+            min_time = key_time
+
+    # Move the time data into a list
+    converted = list()
+    for stats in data:
+        value = data[stats]
+        value["time"] = unix_time(stats) - min_time
+        converted.append(value)
+
+    # Sort the list based on the timestamp
+    converted = sorted(converted, key=lambda key: key["time"])
+
+    # Create one dictionary with all values
+    final = dict()
+    for stats in converted:
+        for key, value in stats.iteritems():
+            if key not in final:
+                final[key] = list()
+            final[key].append(value)
+
+    return final
+
+class Configuration(object):
+
+    def __init__(self, filename):
+        self.filename = filename
+        self.config = None
+        self.itr_loc = 0
+
+    def get_name(self):
+        return self.config["name"]
+
+    def get_tests(self):
+        return self.config["tests"]
+
+    def get_graphs(self):
+        return self.config["graphs"]
+
+    def read(self):
+        json_data=open(self.filename)
+
+        try:
+            self.config = json.load(json_data)
+            json_data.close()
+        except ValueError as e:
+            logger.error("File error in \'{0}\', {1}".format(self.filename, e))
+            self.config = None
+            json_data.close()
+            return False
+
+        return True
+
+def printInfo(stats):
+    all = [ "ep_dcp_replica_producer_count", "ep_dcp_replica_items_remaining",
+            "ep_dcp_replica_items_sent", "ep_dcp_replica_total_bytes",
+            "ep_dcp_other_producer_count", "ep_dcp_other_items_remaining",
+            "ep_dcp_other_items_sent", "ep_dcp_other_total_bytes" ]
+    for str in all:
+        print str, stats[str]
+
+def plot(config, graph):
+    title = graph["title"]
+    to_plot = graph["stat"]
+    output = graph["output"]
+    skip = graph["skip"]
+    yLimit = None
+
+    if "y_limit" in graph:
+        yLimit = graph["y_limit"]
+
+    lines = list()
+    line_names = list()
+    for test in config.get_tests():
+        if test["name"] in skip:
+            continue
+        url = "{0}{1}/_all_docs".format(SERIESLY_URL, test["db"])
+        stats = get_stats(url)
+
+
+
+        #printInfo(stats)
+        for stat_name, legend_name in to_plot.iteritems():
+            line, = plt.plot(stats["time"], stats[stat_name])
+            lines.append(line)
+            if legend_name == "":
+                line_names.append(test["name"])
+            else:
+                line_names.append(test["name"] + " - " + legend_name)
+
+    plot_name = "{0} ({1})".format(config.get_name(), title)
+    plt.xlabel("Time (Seconds)", size=10)
+    plt.ylabel(title, size=10)
+    plt.title(plot_name, size=20)
+    plt.legend(lines, line_names, prop={'size':10})
+
+    if yLimit:
+        plt.ylim((0, yLimit))
+    #plt.show()
+    plt.savefig(output)
+    plt.clf()
+
+def print_avg(config):
+    for test in config.get_tests():
+        url = "{0}{1}/_all_docs".format(SERIESLY_URL, test["db"])
+        stats = get_stats(url)
+        items_rem = stats['ep_dcp_replica_items_remaining']
+        print "Items Remaining Avg: ", sum(items_rem) / float(len(items_rem))
+        print "Items Remaining Max: ", max(items_rem)
+
+        bytes_sent = stats['ep_dcp_replica_total_bytes']
+        print "Bytes Sent Avg: ", sum(bytes_sent) / float(len(bytes_sent)) / 1024 / 1024
+        print "Bytes Sent Max: ", max(bytes_sent) / 1024 / 1024
+        print "Bytes Sent Min: ", min(bytes_sent) / 1024 / 1024
+
+
+def print_percentiles(config):
+    url = "{0}{1}/_all_docs".format(SERIESLY_URL, "observemikewied_302-1603-rel_da8bucket-1")
+    r = requests.get(url)
+    data = json.loads(r.content)
+
+    latencies = []
+    for key, value in data.iteritems():
+        latencies.append(value['latency_observe'])
+
+    latencies = sorted(latencies)
+
+    print "99th:", latencies[int(len(latencies) * .99)]
+    print "95th:", latencies[int(len(latencies) * .95)]
+    print "80th:", latencies[int(len(latencies) * .80)]
+    print "50th:", latencies[int(len(latencies) * .50)]
+
+
+def main():
+    parser = argparse.ArgumentParser(prog='plotter',
+                                     usage='%(prog)s -f <file> [options]',
+                                     add_help=True)
+
+    parser.add_argument('-f', '--file', required=True,
+                        help='The path to the configfile')
+
+    args = parser.parse_args()
+    config = Configuration(args.file)
+    if not config.read():
+        sys.exit()
+
+    print_avg(config)
+    print_percentiles(config)
+
+    #for graph in config.get_graphs():
+    #    plot(config, graph)
+
+
+if __name__ == "__main__":
+    main()

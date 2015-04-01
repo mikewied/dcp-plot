@@ -1,0 +1,19 @@
+{
+  "name": "5000 ops/sec, 2 nodes",
+  "tests": [
+    {
+      "name": "1 Client",
+      "db": "ns_servermikewied_302-1603-rel_da8bucket-1",
+      "hash": "01a11722312149",
+      "skip": 2
+    }
+  ],
+  "graphs": [
+    {
+      "title": "Replica Items Remaining",
+      "stat": "ep_dcp_replica_items_remaining",
+      "output": "5kops-2node-replica-items-remaining_capped.png",
+      "y_limit": 5000
+    }
+  ]
+}
