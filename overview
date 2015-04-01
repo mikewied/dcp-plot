@@ -1,0 +1,106 @@
+#!/usr/bin/env python
+
+import argparse
+import json
+import logging
+import requests
+import sys
+
+import matplotlib.pyplot as plt
+
+from datetime import datetime
+from pprint import pprint
+
+SERIESLY_URL = "http://ci.sc.couchbase.com:3133/"
+
+FORMAT = "%(asctime)s plotter %(levelname)-8s: %(message)s"
+logging.basicConfig(format=FORMAT)
+logger = logging.getLogger('plotter')
+
+def convert_stats():
+    pass
+
+def unix_time(time_str):
+    dt = datetime.strptime(time_str.split('.')[0], '%Y-%m-%dT%H:%M:%S')
+    epoch = datetime.utcfromtimestamp(0)
+    delta = dt - epoch
+    return int(delta.total_seconds())
+
+def get_stats(url):
+    r = requests.get(url)
+    data = json.loads(r.content)
+
+    min_time = sys.maxint
+    for stats in data:
+        key_time = unix_time(stats)
+        if key_time < min_time:
+            min_time = key_time
+
+    # Move the time data into a list
+    converted = list()
+    for stats in data:
+        value = data[stats]
+        value["time"] = unix_time(stats) - min_time
+        converted.append(value)
+
+    # Sort the list based on the timestamp
+    converted = sorted(converted, key=lambda key: key["time"])
+
+    # Create one dictionary with all values
+    final = dict()
+    for stats in converted:
+        for key, value in stats.iteritems():
+            if key not in final:
+                final[key] = list()
+            final[key].append(value)
+
+    return final
+
+def print_avg(test_name):
+    db = "ns_servermikewied_{0}".format(test_name)
+    url = "{0}{1}/_all_docs".format(SERIESLY_URL, db)
+    stats = get_stats(url)
+    items_rem = stats['ep_dcp_replica_items_remaining']
+    print "Items Remaining Avg: ", sum(items_rem) / float(len(items_rem))
+    print "Items Remaining Max: ", max(items_rem)
+
+    bytes_sent = stats['ep_dcp_replica_total_bytes']
+    print "Bytes Sent Avg: ", sum(bytes_sent) / float(len(bytes_sent)) / 1024 / 1024
+    print "Bytes Sent Max: ", max(bytes_sent) / 1024 / 1024
+    print "Bytes Sent Min: ", min(bytes_sent) / 1024 / 1024
+
+
+def print_percentiles(test_name):
+    db = "observemikewied_{0}".format(test_name)
+    url = "{0}{1}/_all_docs".format(SERIESLY_URL, db)
+    r = requests.get(url)
+    data = json.loads(r.content)
+
+    latencies = []
+    for key, value in data.iteritems():
+        latencies.append(value['latency_observe'])
+
+    latencies = sorted(latencies)
+
+    print "99th:", latencies[int(len(latencies) * .99)]
+    print "95th:", latencies[int(len(latencies) * .95)]
+    print "80th:", latencies[int(len(latencies) * .80)]
+    print "50th:", latencies[int(len(latencies) * .50)]
+
+
+def main():
+    parser = argparse.ArgumentParser(prog='plotter',
+                                     usage='%(prog)s -f <file> [options]',
+                                     add_help=True)
+
+    parser.add_argument('-t', '--test', required=True,
+                        help='The name of the test (ex. 302-1603-rel_da8bucket-1)')
+
+    args = parser.parse_args()
+
+    print_avg(args.test)
+    print_percentiles(args.test)
+
+
+if __name__ == "__main__":
+    main()
